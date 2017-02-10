@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import logging
+import re
 
 from mopidy import backend
 
@@ -16,6 +17,8 @@ class SpotifyPlaylistsProvider(backend.PlaylistsProvider):
 
     def __init__(self, backend):
         self._backend = backend
+        config = self._backend._config
+        self.offlineplaylists = config['spotify']['offline_playlists']
 
     def as_list(self):
         with utils.time_logger('playlists.as_list()'):
@@ -31,6 +34,26 @@ class SpotifyPlaylistsProvider(backend.PlaylistsProvider):
         username = self._backend._session.user_name
         folders = []
 
+        offlinecount = self._backend._session.offline.num_playlists
+        logger.info("offline playlist count:%d", offlinecount)
+        if offlinecount > 0:
+            offlineS = self._backend._session.offline
+            syncstatus = offlineS.sync_status
+            if syncstatus:
+                queued = offlineS.sync_status.queued_tracks
+                done = offlineS.sync_status.done_tracks
+                errored = offlineS.sync_status.error_tracks
+                logger.info(
+                    "Offline sync status: Queued= %d, Done=%d, Error=%d",
+                    queued, done, errored)
+            else:
+                logger.info("Offline sync status: Not syncing")
+
+            seconds = offlineS.time_left
+            logger.info(
+                "Time until user must go online: %d hours",
+                seconds / 3600)
+
         for sp_playlist in self._backend._session.playlist_container:
             if isinstance(sp_playlist, spotify.PlaylistFolder):
                 if sp_playlist.type is spotify.PlaylistType.START_FOLDER:
@@ -42,7 +65,37 @@ class SpotifyPlaylistsProvider(backend.PlaylistsProvider):
             playlist_ref = translator.to_playlist_ref(
                 sp_playlist, folders=folders, username=username)
             if playlist_ref is not None:
+                self.offlineCheck(sp_playlist, playlist_ref)
                 yield playlist_ref
+
+    def offlineCheck(self, sp_playlist, playlist):
+        if sp_playlist is None:
+            return
+
+        logger.info("loaded playlist:%s offline status=%s tracks:%d",
+                    playlist.name,
+                    sp_playlist.offline_status,
+                    len(sp_playlist.tracks))
+
+        offline = False
+        for pl in self.offlineplaylists:
+            p = re.compile(pl)
+            if p.match(playlist.name):
+                offline = True
+                break
+        offlineStatus = sp_playlist.offline_status
+        if offline and \
+                offlineStatus == spotify.PlaylistOfflineStatus.NO:
+            logger.info("Offline playlist:%s,%s",
+                        playlist.name,
+                        sp_playlist.offline_status)
+            sp_playlist.set_offline_mode(offline=True)
+        if not offline and \
+                offlineStatus != spotify.PlaylistOfflineStatus.NO:
+            logger.info("Online playlist:%s,%s",
+                        playlist.name,
+                        sp_playlist.offline_status)
+            sp_playlist.set_offline_mode(offline=False)
 
     def get_items(self, uri):
         with utils.time_logger('playlist.get_items(%s)' % uri):

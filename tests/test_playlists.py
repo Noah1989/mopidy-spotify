@@ -22,6 +22,7 @@ def session_mock(
     sp_playlist2_mock.is_loaded = True
     sp_playlist2_mock.owner = mock.Mock(spec=spotify.User)
     sp_playlist2_mock.owner.canonical_name = 'bob'
+    sp_playlist2_mock.offline_status = spotify.PlaylistOfflineStatus.NO
     sp_playlist2_mock.link.uri = 'spotify:playlist:bob:baz'
     sp_playlist2_mock.name = 'Baz'
     sp_playlist2_mock.tracks = []
@@ -43,10 +44,11 @@ def session_mock(
 
 
 @pytest.fixture
-def backend_mock(session_mock):
+def backend_mock(session_mock, config):
     backend_mock = mock.Mock(spec=backend.SpotifyBackend)
     backend_mock._session = session_mock
     backend_mock._bitrate = 160
+    backend_mock._config = config
     return backend_mock
 
 
@@ -68,8 +70,10 @@ def test_as_list_when_not_logged_in(
     assert len(result) == 0
 
 
-def test_as_list_when_offline(session_mock, provider):
+def test_as_list_when_offline(session_mock, provider, config):
     session_mock.connection.state = spotify.ConnectionState.OFFLINE
+    session_mock.offline.time_left = 3600
+    provider._backend._config = config
 
     result = provider.as_list()
 
@@ -84,7 +88,10 @@ def test_as_list_when_playlist_container_isnt_loaded(session_mock, provider):
     assert len(result) == 0
 
 
-def test_as_list_with_folders_and_ignored_unloaded_playlist(provider):
+def test_as_list_with_folders_and_ignored_unloaded_playlist(
+        session_mock, provider, config):
+    session_mock.offline.time_left = 3600
+    provider._backend._config = config
     result = provider.as_list()
 
     assert len(result) == 2
@@ -159,7 +166,6 @@ def test_create(session_mock, sp_playlist_mock, provider):
         spec=spotify.PlaylistContainer)
     session_mock.playlist_container.add_new_playlist.return_value = (
         sp_playlist_mock)
-
     playlist = provider.create('Foo')
 
     session_mock.playlist_container.add_new_playlist.assert_called_once_with(
